@@ -1,0 +1,315 @@
+
+//Product availability and locations*************************************************************************
+
+db.Product.aggregate([{
+            "$addFields": {
+                "Branch_Info": {
+                    "$ifNull": ["$Branch_Info", []]
+                }
+            }
+        }, {
+            "$lookup": {
+                "from": "Branch",
+                "localField": "Branch_Info.Branch_ID",
+                "foreignField": "Branch_Id",
+                "as": "Branch"
+            }
+        }, {
+            "$addFields": {
+                "Branch_Info": {
+                    "$map": {
+                        "input": "$Branch_Info",
+                        "in": {
+                            "$mergeObjects": [
+                                "$$this", {
+                                    "Branch_ID": {
+                                        "$arrayElemAt": [
+                                            "$Branch", {
+                                                "$indexOfArray": [
+                                                    "$Branch.Branch_Id",
+                                                    "$$this.Branch_ID"
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }, {
+            "$project": {
+                "Branch": 0
+            }
+        }, {
+            "$project": {
+                "_id": 0,
+                "Product_No": 1,
+                "Product_Info.Name": 1,
+                "Category_Name": 1,
+                "Branch_Info.Branch_ID.Branch_Id": 1,
+                "Branch_Info.Branch_Product_Inventory": 1,
+                "Branch_Info.Branch_ID.Branch_name": 1
+            }
+        }
+    ]).pretty()
+
+//History of delivery of orders*************************************************************************
+db.Order.aggregate([{
+            $match: {
+                "Order_Is_Online": "Yes"
+            }
+        }, {
+
+            $project: {
+                "_id": 0,
+                "Order_No": 1,
+                "Order_Is_Online": 1,
+                "Delivery_Status":"$Order_Delivery_Status",
+                "Payment_Status":"$Order_Payment_Status",
+                "Reference_Number":"$Order_Reference_Number",
+                "Order_Shipped_date": 1,
+                "Order_Date": 1,
+                "Order_Time": 1
+
+            }
+
+        }
+
+    ])
+
+//Products purchasing record based on the locations******************************************************
+db.Order.aggregate([{
+            $match: {
+                "Order_Is_Online": "No"
+            }
+        }, {
+            $unwind: "$Order_Details"
+        }, {
+            $group: {
+                "_id": {
+                    "Branch": "$Branch_ID",
+                    "Product_No": "$Order_Details.Product_No",
+                    "Order_Date": "$Order_Date"
+                },
+                "Total_price": {
+                    $sum: "$Order_Details.Order_Price"
+                },
+                "Total_Numbers": {
+                    $sum: "$Order_Details.Order_quantity"
+                },
+                "Number_Of_Purchase": {
+                    $sum: 1
+                }
+            }
+        }, {
+            $project: {
+                "_id": 0,
+                "Branch_ID": "$_id.Branch",
+                "Product_No": "$_id.Product_No",
+                "Total_price": 1,
+                "Total_Numbers": 1,
+				"Number_Of_Purchase":1,
+                "Order_Date": "$_id.Order_Date"
+            }
+        }, {
+            "$lookup": {
+                "from": "Branch",
+                "localField": "Branch_ID",
+                "foreignField": "Branch_Id",
+                "as": "Branch_lookup"
+            }
+        }, {
+            "$lookup": {
+                "from": "Product",
+                "localField": "Product_No",
+                "foreignField": "Product_No",
+                "as": "Product_lookup"
+            }
+        }, {
+            $project: {
+                "_id": 0,
+                "Branch_name": "$Branch_lookup.Branch_name",
+                "Product_name": "$Product_lookup.Product_Info.Name",
+                "Branch_ID": { $toString: "$Branch_ID" },
+                "Product_No": 1,
+                "Total_price": "$Total_price",
+                "Total_Numbers": "$Total_Numbers",
+				"Number_Of_Purchase":1,
+                "Order_Date": "$Order_Date"
+            }
+
+        }, {
+            $unwind: "$Branch_name"
+        }, {
+            $unwind: "$Product_name"
+        }, {
+            "$group": {
+                "_id": {
+                    $concat: ["$Branch_ID", "-", "$Branch_name"]
+                },
+                "ItemsSold": {
+                    "$push": {
+                        Product: "$Product_name",
+                        quantity: "$Total_Numbers",
+                        price: "$Total_price",
+						times:"$Number_Of_Purchase"
+                    }
+                }
+            }
+        }, {
+            $sort: {
+                "_id": 1
+            }
+        }
+    ])
+
+
+//current employee of each branch and their role********************************
+db.Employee.aggregate([{
+            $match: {
+                $or: [{
+                        "Shift_Info.EndDate": "01/01/9999"
+                    }, {
+                        "Manager_EndDate": "01/01/9999"
+                    }
+                ]
+            }
+        }, {
+            "$lookup": {
+                "from": "Branch",
+                "localField": "Employee_Branch_Id",
+                "foreignField": "Branch_Id",
+                "as": "Branch_lookup"
+            }
+        }, {
+            $project: {
+                Fullname: {
+                    $concat: ["$Employee_fName", " ", "$Employee_lName"]
+                },
+                "Branch_Id": "$Employee_Branch_Id",
+                "Branch_name": "$Branch_lookup.Branch_name",
+                "Job": "$Employee_Job",
+                "Salary": "$Employee_Salary"
+            }
+        }, {
+            $unwind: "$Branch_name"
+        }, {
+            "$group": {
+                "_id":"$Branch_name",
+                "CurrentEmployee": {
+                    "$push": {
+                        Fullname: "$Fullname",
+                        Role: "$Job",
+                        Salary: "$Salary"
+                    }
+                }
+            }
+        }, {
+            $sort: {
+                "_id": -1
+            }
+        }
+    ])
+
+
+//Top Online Customers in 2022 ***************************************************************************
+
+db.Order.aggregate([{
+            $project: {
+                Order_Date: {
+                    $dateFromString: {
+                        dateString: '$Order_Date',
+                        format: "%d/%m/%Y"
+                    }
+                },
+                "Order_Is_Online": 1,
+                "Customer_ID": 1,
+                "Order_TotalPrice": 1
+            }
+        },
+        {
+            $match: {
+                "Order_Is_Online": "Yes"
+            }
+        }, {
+            $match: {
+                Order_Date: {
+                    $gte: ISODate("2022-01-01T00:00:00.000Z"),
+                    $lt:  ISODate("2023-01-01T00:00:00.000Z")
+                }
+            }
+        }, {
+            $group: {
+                _id: "$Customer_ID",
+                "Customer_Payment": {
+                    $sum: "$Order_TotalPrice"
+                },
+                "Customer_Purchase_No": {
+                    $sum: 1
+                }
+
+            }
+        }, {
+            "$lookup": {
+                "from": "Customer",
+                "localField": "_id",
+                "foreignField": "Customer_ID",
+                "as": "Customer_lookup"
+            }
+        }, {
+            $project: {
+                "_id": 1,
+                "Customer_fName": "$Customer_lookup.Customer_fName",
+                "Customer_lName": "$Customer_lookup.Customer_lName",
+                "Customer_Payment": 1,
+                "Customer_Purchase_No": 1,
+                "Customer_Email": "$Customer_lookup.Account_Info.Customer_Email"
+
+            }
+
+        }, {
+            $unwind: "$Customer_Email"
+        }, {
+            $unwind: "$Customer_fName"
+        }, {
+            $unwind: "$Customer_lName"
+        }, {
+            $project: {
+                "_id": 0,
+                Fullname: {
+                    $concat: ["$Customer_fName", " ", "$Customer_lName"]
+                },
+                "Customer_Payment": {$round :["$Customer_Payment", 2]},
+                "Number_Of_Purchase": "$Customer_Purchase_No",
+                "Customer_Email": 1,
+                "Discount": {
+                    $multiply: ["$Customer_Payment", 0.15]
+                }
+
+            }
+
+        }, {
+            $sort: {
+                "Customer_Payment": -1
+            }
+        }, {
+            $limit: 3
+        }
+    ])
+    
+    
+    
+ // Look for products for specific season with specific composition and description***********************************************************************
+
+db.Product.find({
+    "Product_Collection": "Winter",
+    "Product_Info.Composition": {
+        $regex: "Cott"
+    },
+    "Product_Info.Description": {
+        $regex: "Kangaroo Pocket"
+    }
+})
+
